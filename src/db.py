@@ -76,6 +76,7 @@ def init_db():
             license_family VARCHAR(255),
             copyright_status VARCHAR(255),
             license_evidence TEXT,
+            license_source VARCHAR(255),
             license_confidence DOUBLE PRECISION,
             detection_method VARCHAR(100),
             quality_tier VARCHAR(100),
@@ -89,6 +90,7 @@ def init_db():
         );
 
         ALTER TABLE books ADD COLUMN IF NOT EXISTS full_text TEXT;
+        ALTER TABLE books ADD COLUMN IF NOT EXISTS license_source VARCHAR(255);
 
         CREATE INDEX IF NOT EXISTS idx_books_md5_hash ON books(md5_hash);
         CREATE INDEX IF NOT EXISTS idx_books_license ON books(license_detected);
@@ -106,6 +108,12 @@ def init_db():
         return False
 
 
+def clean_nul(val):
+    if isinstance(val, str):
+        return val.replace("\x00", "")
+    return val
+
+
 def save_to_postgres(metadata, license_detection, processed_at=None):
     """
     Upserts PDF metadata and license detection payload into PostgreSQL.
@@ -121,45 +129,46 @@ def save_to_postgres(metadata, license_detection, processed_at=None):
     if processed_at is None:
         processed_at = metadata.get("processed_at") or datetime.now().isoformat()
 
-    filename = metadata.get("filename", "")
+    filename = clean_nul(metadata.get("filename", ""))
     if not filename:
         print("[ERROR] Metadata missing 'filename'. Cannot save to DB.")
         return False
 
     # Extract scalar fields
-    file_path = metadata.get("file_path", "")
-    source_folder = metadata.get("source_folder", "")
+    file_path = clean_nul(metadata.get("file_path", ""))
+    source_folder = clean_nul(metadata.get("source_folder", ""))
     file_size_bytes = metadata.get("file_size_bytes", 0)
-    md5_hash = metadata.get("md5_hash", "")
-    title = metadata.get("title", "")
-    author = metadata.get("author", "")
-    publisher = metadata.get("publisher", "")
-    subject = metadata.get("subject", "")
-    keywords = metadata.get("keywords", "")
-    creation_date = str(metadata.get("creation_date", ""))
-    language = metadata.get("language", "")
+    md5_hash = clean_nul(metadata.get("md5_hash", ""))
+    title = clean_nul(metadata.get("title", ""))
+    author = clean_nul(metadata.get("author", ""))
+    publisher = clean_nul(metadata.get("publisher", ""))
+    subject = clean_nul(metadata.get("subject", ""))
+    keywords = clean_nul(metadata.get("keywords", ""))
+    creation_date = clean_nul(str(metadata.get("creation_date", "")))
+    language = clean_nul(metadata.get("language", ""))
     page_count = metadata.get("page_count", 0)
     has_toc = bool(metadata.get("has_toc", False))
-    pdf_version = metadata.get("pdf_version", "")
+    pdf_version = clean_nul(metadata.get("pdf_version", ""))
     is_encrypted = bool(metadata.get("is_encrypted", False))
     is_corrupted = bool(metadata.get("is_corrupted", False))
     is_parseable = bool(metadata.get("is_parseable", True))
     is_scanned_only = bool(metadata.get("is_scanned_only", False))
     first_page_char_count = metadata.get("first_page_char_count", 0)
-    text_sample = metadata.get("text_sample", "")
-    full_text = metadata.get("full_text", text_sample)
+    text_sample = clean_nul(metadata.get("text_sample", ""))
+    full_text = clean_nul(metadata.get("full_text", text_sample))
 
-    license_detected = metadata.get("license_detected") or license_detection.get("license_name", "Unknown")
-    license_family = metadata.get("license_family") or license_detection.get("license_family", "")
-    copyright_status = metadata.get("copyright_status") or license_detection.get("copyright_status", "")
-    license_evidence = metadata.get("license_evidence") or license_detection.get("evidence", "")
+    license_detected = clean_nul(metadata.get("license_detected") or license_detection.get("license_name", "Unknown"))
+    license_family = clean_nul(metadata.get("license_family") or license_detection.get("license_family", ""))
+    copyright_status = clean_nul(metadata.get("copyright_status") or license_detection.get("copyright_status", ""))
+    license_evidence = clean_nul(metadata.get("license_evidence") or license_detection.get("evidence", ""))
+    license_source = clean_nul(metadata.get("license_source") or license_detection.get("source", ""))
     license_confidence = float(metadata.get("license_confidence", license_detection.get("confidence", 0.0)))
-    detection_method = metadata.get("detection_method") or license_detection.get("method", "")
+    detection_method = clean_nul(metadata.get("detection_method") or license_detection.get("method", ""))
 
-    quality_tier = metadata.get("quality_tier", "")
+    quality_tier = clean_nul(metadata.get("quality_tier", ""))
     exclude_from_training = bool(metadata.get("exclude_from_training", False))
-    exclusion_reason = metadata.get("exclusion_reason", "")
-    processing_error = metadata.get("processing_error", "")
+    exclusion_reason = clean_nul(metadata.get("exclusion_reason", ""))
+    processing_error = clean_nul(metadata.get("processing_error", ""))
 
     try:
         conn = get_db_connection()
@@ -171,7 +180,7 @@ def save_to_postgres(metadata, license_detection, processed_at=None):
             title, author, publisher, subject, keywords, creation_date, language,
             page_count, has_toc, pdf_version, is_encrypted, is_corrupted,
             is_parseable, is_scanned_only, first_page_char_count, text_sample, full_text,
-            license_detected, license_family, copyright_status, license_evidence,
+            license_detected, license_family, copyright_status, license_evidence, license_source,
             license_confidence, detection_method, quality_tier, exclude_from_training,
             exclusion_reason, processing_error, license_detection, raw_metadata, processed_at
         ) VALUES (
@@ -179,8 +188,8 @@ def save_to_postgres(metadata, license_detection, processed_at=None):
             %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s
         )
         ON CONFLICT (filename) DO UPDATE SET
@@ -209,6 +218,7 @@ def save_to_postgres(metadata, license_detection, processed_at=None):
             license_family = EXCLUDED.license_family,
             copyright_status = EXCLUDED.copyright_status,
             license_evidence = EXCLUDED.license_evidence,
+            license_source = EXCLUDED.license_source,
             license_confidence = EXCLUDED.license_confidence,
             detection_method = EXCLUDED.detection_method,
             quality_tier = EXCLUDED.quality_tier,
@@ -220,16 +230,19 @@ def save_to_postgres(metadata, license_detection, processed_at=None):
             processed_at = EXCLUDED.processed_at;
         """
 
+        json_license_detection = json.dumps(license_detection, ensure_ascii=False).replace("\u0000", "").replace("\x00", "")
+        json_metadata = json.dumps(metadata, ensure_ascii=False).replace("\u0000", "").replace("\x00", "")
+
         cursor.execute(sql, (
             filename, file_path, source_folder, file_size_bytes, md5_hash,
             title, author, publisher, subject, keywords, creation_date, language,
             page_count, has_toc, pdf_version, is_encrypted, is_corrupted,
             is_parseable, is_scanned_only, first_page_char_count, text_sample, full_text,
-            license_detected, license_family, copyright_status, license_evidence,
+            license_detected, license_family, copyright_status, license_evidence, license_source,
             license_confidence, detection_method, quality_tier, exclude_from_training,
             exclusion_reason, processing_error,
-            json.dumps(license_detection, ensure_ascii=False),
-            json.dumps(metadata, ensure_ascii=False),
+            json_license_detection,
+            json_metadata,
             processed_at
         ))
 

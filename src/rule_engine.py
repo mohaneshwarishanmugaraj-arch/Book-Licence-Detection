@@ -326,6 +326,23 @@ LICENSES = [
     # --------------------------------------------------------
 
     {
+        "name": "NCERT",
+        "family": "Educational",
+        "multi_keywords": [
+            ["national council of educational research and training", "textbook"],
+            ["national council of educational research and training", "class"],
+        ],
+        "keywords": [
+            "national council of educational research and training",
+            "ncert",
+        ],
+        "commercial_use": False,
+        "modification_allowed": False,
+        "redistribution_allowed": False,
+        "attribution_required": True,
+    },
+
+    {
         "name": "All Rights Reserved",
         "family": "Copyright",
         "multi_keywords": [],
@@ -457,6 +474,24 @@ def detect_license_rule_based(text):
     # Scan each license definition
     # --------------------------------------------------------
 
+    # Prefer explicit copyright restriction notices over
+    # general publisher/educational identity matches.
+    if "all rights reserved" in text_lower or "no part of this publication may be reproduced" in text_lower:
+        return {
+            "license_name": "All Rights Reserved",
+            "license_family": "Copyright",
+            "copyright_holder": extract_copyright_holder(text),
+            "copyright_status": "All Rights Reserved",
+            "commercial_use": False,
+            "modification_allowed": False,
+            "redistribution_allowed": False,
+            "attribution_required": False,
+            "evidence": find_evidence(text, "all rights reserved"),
+            "confidence": 1.0,
+            "method": "Rule-Based",
+            "matched_keyword": "all rights reserved",
+        }
+
     for license_def in LICENSES:
 
         matched = False
@@ -529,6 +564,10 @@ def detect_license_rule_based(text):
             elif license_def["family"] == "Public Domain":
 
                 copyright_status = "Public Domain"
+
+            elif license_def["name"] == "NCERT":
+
+                copyright_status = "Licensed under NCERT"
 
             else:
 

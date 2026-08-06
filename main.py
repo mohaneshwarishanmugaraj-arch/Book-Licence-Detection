@@ -32,32 +32,20 @@ from src.db import init_db, save_to_postgres
 
 load_dotenv()
 
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-
-if not NVIDIA_API_KEY:
-    raise ValueError(
-        """
-NVIDIA_API_KEY not found.
-
-Create a .env file in the project root:
-
-NVIDIA_API_KEY=your_nvidia_api_key
-"""
+def get_nvidia_client():
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        return None
+    return OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=api_key,
+        timeout=180.0,
+        max_retries=3
     )
 
+client = get_nvidia_client()
 
-# ============================================================
-# 2. NVIDIA CLIENT
-# ============================================================
-
-client = OpenAI(
-    base_url="https://integrate.api.nvidia.com/v1",
-    api_key=NVIDIA_API_KEY,
-    timeout=180.0,
-    max_retries=3
-)
-
-MODEL_NAME = "meta/llama-3.2-3b-instruct"
+MODEL_NAME = "meta/llama-3.1-8b-instruct"
 
 
 # ============================================================
@@ -431,9 +419,15 @@ IMPORTANT:
 6. "All rights reserved" is NOT a Creative Commons
    or open license.
 
-7. If the evidence only says:
+7. If the evidence clearly states only a copyright
+   restriction such as:
 
    "All rights reserved"
+
+   or
+
+   "No part of this publication may be reproduced
+   without prior permission"
 
    then:
 
@@ -443,12 +437,16 @@ IMPORTANT:
 
    copyright_status = "All Rights Reserved"
 
-8. If the document says:
+8. If the evidence names a specific publisher or
+   institution (for example NCERT) but also contains
+   an explicit copyright restriction, prefer the
+   copyright restriction and return:
 
-   "No part of this publication may be reproduced
-   without prior permission"
+   license_name = "Unknown"
 
-   treat it as a copyright restriction.
+   license_family = "Copyright"
+
+   copyright_status = "All Rights Reserved"
 
 9. Do NOT invent missing information.
 
@@ -890,66 +888,60 @@ def process_pdf(pdf_path):
         chars_per_page=3000
     )
 
-    # STEP 8: RULE-BASED LICENSE DETECTION (DETERMINISTIC)
-    print("\n========== RULE-BASED LICENSE DETECTION ==========")
-    license_result = detect_license_rule_based(preprocessed_text)
-
-    if license_result:
-        print("\n[OK] License detected by RULE-BASED engine")
-        print(f"Matched keyword: {license_result.get('matched_keyword', '')}")
-        print(f"Method: {license_result['method']}")
-        print_license_result(license_result)
+    # STEP 8: LICENSE DETECTION (LLM PRIMARY + RULE-BASED FALLBACK)
+    print("\n========== LICENSE DETECTION ==========")
+    
+    # Try LLM first to get the exact license details
+    nvidia_ok = test_nvidia_connection()
+    license_result = None
+    
+    if nvidia_ok:
+        print("[INFO] Querying NVIDIA LLM for exact license detection...")
+        license_text = extract_license_related_text(full_text)
+        if license_text:
+            print("\nLicense-related evidence found:\n")
+            print(license_text)
+            
+            llm_output = detect_license_with_llm(license_text)
+            print("\n========== RAW NVIDIA OUTPUT ==========")
+            print(llm_output)
+            
+            license_result = parse_llm_json(llm_output)
+            if license_result and license_result.get("license_name") != "Unknown":
+                print("\n[OK] License detected by NVIDIA LLM")
+                print_license_result(license_result)
+            else:
+                print("\n[INFO] LLM returned 'Unknown' license. Trying rule-based fallback...")
+                license_result = None
+        else:
+            print("\n[WARN] No license-related evidence found for LLM. Trying rule-based...")
     else:
-        print("\n[INFO] No rule-based match found.")
-        print("[INFO] Falling back to NVIDIA LLM...")
+        print("\n[WARN] NVIDIA LLM connection failed. Fallback to rule-based...")
 
-        nvidia_ok = test_nvidia_connection()
-
-        if not nvidia_ok:
-            print("\n[ERROR] NVIDIA LLM connection failed. Fallback unavailable.")
+    if not license_result:
+        print("\n[INFO] Running RULE-BASED license detection fallback...")
+        license_result = detect_license_rule_based(preprocessed_text)
+        if license_result:
+            print("\n[OK] License detected by RULE-BASED engine")
+            print(f"Matched keyword: {license_result.get('matched_keyword', '')}")
+            print(f"Method: {license_result['method']}")
+            print_license_result(license_result)
+        else:
+            print("\n[WARN] No license detected by rule-based engine.")
             license_result = {
                 "license_name": "Unknown",
                 "license_family": "Unknown",
                 "copyright_holder": "",
-                "copyright_status": "LLM fallback failed",
+                "copyright_status": "No license detected",
                 "commercial_use": None,
                 "modification_allowed": None,
                 "redistribution_allowed": None,
                 "attribution_required": None,
                 "evidence": "",
                 "confidence": 0.0,
-                "method": "Failed"
+                "method": "None"
             }
-        else:
-            print("\n========== LICENSE TEXT EXTRACTION ==========")
-            license_text = extract_license_related_text(full_text)
-
-            if license_text:
-                print("\nLicense-related evidence found:\n")
-                print(license_text)
-
-                llm_output = detect_license_with_llm(license_text)
-                print("\n========== RAW NVIDIA OUTPUT ==========")
-                print(llm_output)
-
-                license_result = parse_llm_json(llm_output)
-                print_license_result(license_result)
-            else:
-                print("\n[WARN] No license-related evidence found.")
-                license_result = {
-                    "license_name": "Unknown",
-                    "license_family": "Unknown",
-                    "copyright_holder": "",
-                    "copyright_status": "No license evidence detected",
-                    "commercial_use": None,
-                    "modification_allowed": None,
-                    "redistribution_allowed": None,
-                    "attribution_required": None,
-                    "evidence": "",
-                    "confidence": 0.0,
-                    "method": "None"
-                }
-                print_license_result(license_result)
+            print_license_result(license_result)
 
     # STEP 9: SAVE LICENSE RESULT
     save_license_result(license_result, pdf_path)

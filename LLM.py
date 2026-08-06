@@ -17,7 +17,7 @@ client = OpenAI(
 print("Testing NVIDIA API...")
 
 response = client.chat.completions.create(
-    model="meta/llama-3.2-3b-instruct",
+    model="meta/llama-3.1-8b-instruct",
     messages=[
         {
             "role": "user",

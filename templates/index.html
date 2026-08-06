@@ -259,6 +259,17 @@
             color: white;
         }
 
+        .btn-meta {
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            border: none;
+            color: white;
+            font-weight: 600;
+        }
+
+        .btn-meta:hover {
+            opacity: 0.9;
+        }
+
         .btn-read {
             background: linear-gradient(135deg, #10b981, #059669);
             border: none;
@@ -322,6 +333,34 @@
             font-size: 0.85rem;
             overflow-x: auto;
             white-space: pre-wrap;
+        }
+
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .metadata-item {
+            background: rgba(15, 23, 42, 0.4);
+            padding: 0.8rem;
+            border-radius: 8px;
+            border: 1px solid var(--card-border);
+        }
+
+        .metadata-key {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.3rem;
+        }
+
+        .metadata-value {
+            font-size: 0.95rem;
+            color: #f8fafc;
+            word-break: break-word;
         }
 
         .close-btn {
@@ -427,11 +466,21 @@
                         badgeClass += ' open';
                     }
 
-                    // Highlight matching search snippet
-                    let snippet = escapeHtml(b.matching_snippet || b.text_sample || '');
-                    if (query) {
+                    // Highlight matching search snippet only if there is a query
+                    let snippetHtml = '';
+                    if (query && b.matching_snippet) {
+                        let snippet = escapeHtml(b.matching_snippet);
                         const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
                         snippet = snippet.replace(regex, '<mark>$1</mark>');
+                        snippetHtml = `
+                            <div class="snippet-box">
+                                <strong>Content Match:</strong><br>
+                                ${snippet}
+                            </div>
+                        `;
+                    } else {
+                        // When no query, just show nothing to keep the card clean
+                        snippetHtml = '';
                     }
 
                     return `
@@ -444,19 +493,13 @@
                                     </div>
                                     <span class="${badgeClass}">${escapeHtml(lic)}</span>
                                 </div>
-                                <div class="snippet-box">
-                                    <strong>Content Match:</strong><br>
-                                    ${snippet}
-                                </div>
-                                <ul class="meta-list">
-                                    <li><span class="meta-label">Author:</span> <span>${escapeHtml(b.author || 'N/A')}</span></li>
-                                    <li><span class="meta-label">File Size:</span> <span>${(b.file_size_bytes / 1024 / 1024).toFixed(2)} MB</span></li>
-                                    <li><span class="meta-label">Processed:</span> <span>${new Date(b.processed_at).toLocaleDateString()}</span></li>
-                                </ul>
+                                
+                                ${snippetHtml}
+
                             </div>
                             <div class="card-footer">
                                 <button class="btn-action btn-read" onclick="openReader(${idx})">📖 Read Book</button>
-                                <button class="btn-action" onclick="openJsonModal(${idx})">View JSON</button>
+                                <button class="btn-action btn-meta" onclick="openJsonModal(${idx})">📋 View Metadata</button>
                             </div>
                         </div>
                     `;
@@ -482,6 +525,20 @@
             return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
 
+        function closeModal() {
+            const modal = document.getElementById('modal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        window.addEventListener('click', (event) => {
+            const modal = document.getElementById('modal');
+            if (modal && event.target === modal) {
+                closeModal();
+            }
+        });
+
         async function openReader(index) {
             const book = currentBooks[index];
             if (!book) return;
@@ -491,10 +548,10 @@
             document.getElementById('modal').style.display = 'flex';
 
             try {
-                const res = await fetch(`/api/book/${encodeURIComponent(book.filename)}`);
+                const res = await fetch(`/api/book_text/${encodeURIComponent(book.filename)}`);
                 const data = await res.json();
-                if (data.book && (data.book.full_text || data.book.text_sample)) {
-                    let content = escapeHtml(data.book.full_text || data.book.text_sample);
+                if (data.full_text || data.text_sample) {
+                    let content = escapeHtml(data.full_text || data.text_sample);
                     const query = document.getElementById('searchInput').value.trim();
                     if (query) {
                         const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
@@ -509,22 +566,75 @@
             }
         }
 
-        function openJsonModal(index) {
+        async function openJsonModal(index) {
             const book = currentBooks[index];
             if (!book) return;
 
-            document.getElementById('modalTitle').textContent = `JSON Payload: ${book.filename}`;
-            const payload = {
-                metadata: book.raw_metadata || book,
-                license_detection: book.license_detection || {},
-                processed_at: book.processed_at
-            };
-            document.getElementById('modalBody').innerHTML = `<pre>${escapeHtml(JSON.stringify(payload, null, 4))}</pre>`;
+            document.getElementById('modalTitle').textContent = `Book Metadata: ${book.title || book.filename}`;
+            document.getElementById('modalBody').innerHTML = '<div style="text-align:center; padding:2rem;">Loading metadata...</div>';
             document.getElementById('modal').style.display = 'flex';
-        }
 
-        function closeModal() {
-            document.getElementById('modal').style.display = 'none';
+            try {
+                const res = await fetch(`/api/book/${encodeURIComponent(book.filename)}`);
+                const data = await res.json();
+                if (data.error) {
+                    document.getElementById('modalBody').innerHTML = `<div style="color:#f87171;">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+
+                const fullBook = data.book || book;
+                const licenseMeta = {
+                    'license_detected': fullBook.license_detected || 'Unknown',
+                    'license_source': fullBook.license_source || 'Unknown',
+                    'license_confidence': fullBook.license_confidence == null ? 'Unknown' : fullBook.license_confidence,
+                    'quality_tier': fullBook.quality_tier || 'Unknown',
+                    'exclude_from_training': fullBook.exclude_from_training == null ? 'Unknown' : fullBook.exclude_from_training,
+                    'exclusion_reason': fullBook.exclusion_reason || 'None',
+                    'processing_error': fullBook.processing_error || 'None'
+                };
+
+                const fileMeta = {
+                    'file_path': fullBook.file_path || 'Unknown',
+                    'filename': fullBook.filename || 'Unknown',
+                    'source_folder': fullBook.source_folder || 'Unknown',
+                    'file_size_bytes': fullBook.file_size_bytes == null ? 'Unknown' : fullBook.file_size_bytes,
+                    'md5_hash': fullBook.md5_hash || 'Unknown',
+                    'title': fullBook.title || 'Unknown',
+                    'author': fullBook.author || 'Unknown',
+                    'publisher': fullBook.publisher || 'Unknown',
+                    'subject': fullBook.subject || 'Unknown',
+                    'keywords': fullBook.keywords || 'Unknown',
+                    'creation_date': fullBook.creation_date || 'Unknown',
+                    'language': fullBook.language || 'Unknown',
+                    'page_count': fullBook.page_count == null ? 'Unknown' : fullBook.page_count,
+                    'has_toc': fullBook.has_toc == null ? 'Unknown' : fullBook.has_toc,
+                    'pdf_version': fullBook.pdf_version || 'Unknown',
+                    'is_encrypted': fullBook.is_encrypted == null ? 'Unknown' : fullBook.is_encrypted,
+                    'is_corrupted': fullBook.is_corrupted == null ? 'Unknown' : fullBook.is_corrupted,
+                    'is_parseable': fullBook.is_parseable == null ? 'Unknown' : fullBook.is_parseable,
+                    'is_scanned_only': fullBook.is_scanned_only == null ? 'Unknown' : fullBook.is_scanned_only,
+                    'first_page_char_count': fullBook.first_page_char_count == null ? 'Unknown' : fullBook.first_page_char_count,
+                    'text_sample': fullBook.text_sample || 'Not available',
+                    'processed_at': fullBook.processed_at || 'Unknown'
+                };
+
+                let html = '<div class="metadata-grid">';
+                html += '<div class="metadata-item"><div class="metadata-key">License Details</div><div class="metadata-value">';
+                for (const [key, value] of Object.entries(licenseMeta)) {
+                    html += `<strong>${escapeHtml(key)}:</strong> ${escapeHtml(String(value))}<br>`;
+                }
+                html += '</div></div>';
+
+                html += '<div class="metadata-item"><div class="metadata-key">File Metadata</div><div class="metadata-value">';
+                for (const [key, value] of Object.entries(fileMeta)) {
+                    html += `<strong>${escapeHtml(key)}:</strong> ${escapeHtml(String(value))}<br>`;
+                }
+                html += '</div></div>';
+                html += '</div>';
+                document.getElementById('modalBody').innerHTML = html;
+            } catch (err) {
+                document.getElementById('modalBody').innerHTML = '<div style="color:#f87171;">Failed to load metadata.</div>';
+            }
         }
 
         window.addEventListener('DOMContentLoaded', () => {
